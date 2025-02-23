@@ -121,6 +121,7 @@ struct serial_feature {
 	unsigned long long gap = 0;  // filled in during z0. square of planar distance
 	unsigned long long label_point = 0;
 	long long extent = 0;
+	float priority = 0.0;
 
 	// These fields are not directly serialized, but are used
 	// to create the keys and values references into the string pool

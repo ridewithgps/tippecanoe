@@ -802,6 +802,10 @@ int serialize_feature(struct serialization_state *sst, serial_feature &sf, std::
 			}
 		}
 
+		if(*sf.full_keys[i] == priority_attribute) {
+			sf.priority = atof(sf.full_values[i].s.c_str());
+		}
+
 		if (*sf.full_keys[i] == attribute_for_id) {
 			if (sf.full_values[i].type != mvt_double && !additional[A_CONVERT_NUMERIC_IDS]) {
 				static bool warned = false;

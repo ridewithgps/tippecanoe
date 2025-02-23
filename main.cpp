@@ -88,6 +88,7 @@ int tiny_polygon_size = 2;
 int cluster_maxzoom = MAX_ZOOM;
 long justx = -1, justy = -1;
 std::string attribute_for_id = "";
+std::string priority_attribute = "";
 size_t limit_tile_feature_count = 0;
 size_t limit_tile_feature_count_at_maxzoom = 0;
 unsigned int drop_denser = 0;
@@ -392,6 +393,7 @@ static void merge(struct mergelist *merges, size_t nmerges, unsigned char *map, 
 		}
 	}
 }
+
 
 struct sort_arg {
 	int task;
@@ -3092,6 +3094,7 @@ int main(int argc, char **argv) {
 		{"drop-densest-as-needed", no_argument, &additional[A_DROP_DENSEST_AS_NEEDED], 1},
 		{"drop-fraction-as-needed", no_argument, &additional[A_DROP_FRACTION_AS_NEEDED], 1},
 		{"drop-smallest-as-needed", no_argument, &additional[A_DROP_SMALLEST_AS_NEEDED], 1},
+		{"priority-attribute", required_argument, 0, '~'},
 		{"coalesce-densest-as-needed", no_argument, &additional[A_COALESCE_DENSEST_AS_NEEDED], 1},
 		{"coalesce-fraction-as-needed", no_argument, &additional[A_COALESCE_FRACTION_AS_NEEDED], 1},
 		{"coalesce-smallest-as-needed", no_argument, &additional[A_COALESCE_SMALLEST_AS_NEEDED], 1},
@@ -3311,6 +3314,8 @@ int main(int argc, char **argv) {
 				maximum_string_attribute_length = atoll_require(optarg, "Maximum string attribute length");
 			} else if (strcmp(opt, "accumulate-numeric-attributes") == 0) {
 				accumulate_numeric = optarg;
+			} else if (strcmp(opt, "priority-attribute") == 0) {
+				priority_attribute = optarg;
 			} else {
 				fprintf(stderr, "%s: Unrecognized option --%s\n", argv[0], opt);
 				exit(EXIT_ARGS);
