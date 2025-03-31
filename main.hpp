@@ -10,20 +10,16 @@
 #include "json_logger.hpp"
 #include "serial.hpp"
 
-struct index {
-	long long start = 0;
-	long long end = 0;
-	unsigned long long ix = 0;
-	short segment = 0;
-	unsigned short t : 2;
-	unsigned long long seq : (64 - 18);  // pack with segment and t to stay in 32 bytes
-
-	index()
-	    : t(0),
-	      seq(0) {
-	}
+struct alignas(32) index {  // Explicitly align to 32 bytes
+    long long start = 0;
+    long long end = 0;
+    unsigned long long ix = 0;
+    short segment = 0;
+    unsigned short t : 2;
+    unsigned long long seq : (64 - 18);
+    float priority = 0.0;
+	int minzoom = -1;
 };
-
 extern std::vector<clipbbox> clipbboxes;
 
 void checkdisk(std::vector<struct reader> *r);

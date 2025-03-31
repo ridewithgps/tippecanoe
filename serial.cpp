@@ -890,6 +890,7 @@ int serialize_feature(struct serialization_state *sst, serial_feature &sf, std::
 	index.seq = *(sst->layer_seq);
 	index.t = sf.t;
 	index.ix = bbox_index;
+	index.priority = sf.priority;
 
 	fwrite_check(&index, sizeof(struct index), 1, r->indexfile, &r->indexpos, sst->fname);
 

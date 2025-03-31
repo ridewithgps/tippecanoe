@@ -348,6 +348,115 @@ int calc_feature_minzoom(struct index *ix, struct drop_state *ds, int maxzoom, d
 	return feature_minzoom;
 }
 
+void calc_feature_minzoom_with_priority(std::vector<struct index> &features, int maxzoom, int minzoom, double gamma, struct drop_state *ds) {
+	
+	// determine if we should preserve point density
+	// even its not set, we still want to prevent collisions between points so we default to 16
+	bool preserve_density = preserve_point_density_threshold > 0;
+	size_t preserve_point_density_threshold_local = preserve_density ? preserve_point_density_threshold : 16; // todo, I still want this but come on!
+	
+	// sort features by priority
+	std::sort(features.begin(), features.end(), [&](const struct index &a, const struct index &b) {
+		return a.priority > b.priority;
+	});
+	// quickly assign minzoom to lines and polygons that dont have dropping
+	for(auto &ix : features) {
+		// set min zoom to 0 for features that are not points or lines/polygons with dropping
+		if (gamma < 0 || (ix.t == VT_LINE && !additional[A_LINE_DROP]) || (ix.t == VT_POLYGON && !additional[A_POLYGON_DROP])) {
+			ix.minzoom = minzoom;
+		}
+	}
+
+	for(int z = minzoom; z < maxzoom; z++) {
+		// when doing simple dropping, this is the number of features we should skip between each feature at this zoom level
+		size_t feature_jump = std::max(static_cast<size_t>(ds[z].interval), static_cast<size_t>(1));
+		// this is the minimum spatial distance between features allowed at this zoom level
+		size_t min_interval = ((1LL << (32 - z)) / preserve_point_density_threshold_local) * ((1LL << (32 - z)) / preserve_point_density_threshold_local);
+		// this is the maximum number of features to include in this zoom level
+		// if we're preserving point density, include as many as we can reasonably fit
+		// otherwise, include a fraction of the features determined by feature_jump
+		size_t X = preserve_density ? features.size() : std::max(features.size() / feature_jump, static_cast<size_t>(1)); 
+		// a very simple way to keep track the idx of the last feature assigned to a "window" of size min_interval
+		// this is surprisingly awesome!
+		std::unordered_map<size_t, size_t> window_idx_to_spatial_idx;
+		
+		size_t assigned_features = 0;
+		// loop through all the features!
+        for (auto &feature : features) {
+			// if this feature has already been assigned a minzoom level, skip it
+			if (feature.minzoom != maxzoom) {
+				continue;
+			}
+
+			// so this is really simple and cheap way to calculate a unique index for a "window" of size min_interval
+            size_t window_index = feature.ix / min_interval;
+			size_t existing_spatial_idx = window_idx_to_spatial_idx[window_index];
+			if (existing_spatial_idx < 1)
+			{
+				feature.minzoom = z;
+				window_idx_to_spatial_idx[window_index] = feature.ix;
+				assigned_features += 1;
+			}
+			if (assigned_features >= X) {
+				break;
+			}
+        }
+
+	}
+}
+
+
+static void merge_with_priority(struct mergelist *merges, size_t nmerges, unsigned char *map, FILE *indexfile, int bytes, char *geom_map, FILE *geom_out, std::atomic<long long> *geompos, long long *progress, long long *progress_max, long long *progress_reported, int maxzoom, int minzoom, double gamma, struct drop_state *ds) {
+	struct mergelist *head = NULL;
+	std::size_t feature_count = 0;
+	for (size_t i = 0; i < nmerges; i++) {
+		if (merges[i].start < merges[i].end) {
+			std::size_t feature_count_for_merge_list = (merges[i].end - merges[i].start)/bytes;
+			feature_count += feature_count_for_merge_list;
+			insert(&(merges[i]), &head, map);
+		}
+	}
+
+	std::vector<struct index> features;
+	features.reserve(feature_count);
+	
+	while (head != NULL) {
+		struct index ix = *((struct index *) (map + head->start));
+		ix.minzoom = maxzoom;
+		features.push_back(ix);
+		head->start += bytes;
+		
+		struct mergelist *m = head;
+		head = m->next;
+		m->next = NULL;
+
+		if (m->start < m->end) {
+			insert(m, &head, map);
+		}
+	}
+
+	calc_feature_minzoom_with_priority(features, maxzoom, minzoom, gamma, ds);
+	// loop through every features and write them to the output file
+	for(size_t i = 0; i < features.size(); i++) {
+		struct index &ix = features[i];
+		long long pos = *geompos;
+
+		fwrite_check(geom_map + ix.start, 1, ix.end - ix.start - 1, geom_out, geompos, "merge geometry");
+		serialize_byte(geom_out, ix.minzoom, geompos, "merge geometry");
+		*progress += (ix.end - ix.start) * 3 / 4;
+		if (!quiet && !quiet_progress && progress_time() && 100 * *progress / *progress_max != *progress_reported) {
+			fprintf(stderr, "Reordering geometry: %lld%% \r", 100 * *progress / *progress_max);
+			fflush(stderr);
+			*progress_reported = 100 * *progress / *progress_max;
+		}
+
+		ix.start = pos;
+		ix.end = *geompos;
+		std::atomic<long long> indexpos;
+		fwrite_check(&ix, bytes, 1, indexfile, &indexpos, "merge temporary");
+	}
+}
+
 static void merge(struct mergelist *merges, size_t nmerges, unsigned char *map, FILE *indexfile, int bytes, char *geom_map, FILE *geom_out, std::atomic<long long> *geompos, long long *progress, long long *progress_max, long long *progress_reported, int maxzoom, double gamma, struct drop_state *ds) {
 	struct mergelist *head = NULL;
 
@@ -742,7 +851,7 @@ void start_parsing(int fd, STREAM *fp, long long offset, long long len, std::ato
 	parser_created = true;
 }
 
-void radix1(int *geomfds_in, int *indexfds_in, int inputs, int prefix, int splits, long long mem, const char *tmpdir, long long *availfiles, FILE *geomfile, FILE *indexfile, std::atomic<long long> *geompos_out, long long *progress, long long *progress_max, long long *progress_reported, int maxzoom, int basezoom, double droprate, double gamma, struct drop_state *ds) {
+void radix1(int *geomfds_in, int *indexfds_in, int inputs, int prefix, int splits, long long mem, const char *tmpdir, long long *availfiles, FILE *geomfile, FILE *indexfile, std::atomic<long long> *geompos_out, long long *progress, long long *progress_max, long long *progress_reported, int maxzoom, int minzoom, int basezoom, double droprate, double gamma, struct drop_state *ds) {
 	// Arranged as bits to facilitate subdividing again if a subdivided file is still huge
 	int splitbits = log(splits) / log(2);
 	splits = 1 << splitbits;
@@ -961,7 +1070,14 @@ void radix1(int *geomfds_in, int *indexfds_in, int inputs, int prefix, int split
 				madvise(geommap, geomst.st_size, MADV_RANDOM);
 				madvise(geommap, geomst.st_size, MADV_WILLNEED);
 
-				merge(merges, nmerges, (unsigned char *) indexmap, indexfile, bytes, geommap, geomfile, geompos_out, progress, progress_max, progress_reported, maxzoom, gamma, ds);
+				if (priority_attribute == "")
+				{
+					merge(merges, nmerges, (unsigned char *) indexmap, indexfile, bytes, geommap, geomfile, geompos_out, progress, progress_max, progress_reported, maxzoom, gamma, ds);
+				}
+				else
+				{
+					merge_with_priority(merges, nmerges, (unsigned char *) indexmap, indexfile, bytes, geommap, geomfile, geompos_out, progress, progress_max, progress_reported, maxzoom, minzoom, gamma, ds);
+				}
 
 				madvise(indexmap, indexst.st_size, MADV_DONTNEED);
 				if (munmap(indexmap, indexst.st_size) < 0) {
@@ -1030,7 +1146,7 @@ void radix1(int *geomfds_in, int *indexfds_in, int inputs, int prefix, int split
 				// counter backward but will be an honest estimate of the work remaining.
 				*progress_max += geomst.st_size / 4;
 
-				radix1(&geomfds[i], &indexfds[i], 1, prefix + splitbits, *availfiles / 4, mem, tmpdir, availfiles, geomfile, indexfile, geompos_out, progress, progress_max, progress_reported, maxzoom, basezoom, droprate, gamma, ds);
+				radix1(&geomfds[i], &indexfds[i], 1, prefix + splitbits, *availfiles / 4, mem, tmpdir, availfiles, geomfile, indexfile, geompos_out, progress, progress_max, progress_reported, maxzoom, minzoom, basezoom, droprate, gamma, ds);
 				already_closed = 1;
 			}
 		}
@@ -1065,7 +1181,7 @@ void prep_drop_states(struct drop_state *ds, int maxzoom, int basezoom, double d
 	}
 }
 
-void radix(std::vector<struct reader> &readers, int nreaders, FILE *geomfile, FILE *indexfile, const char *tmpdir, std::atomic<long long> *geompos, int maxzoom, int basezoom, double droprate, double gamma) {
+void radix(std::vector<struct reader> &readers, int nreaders, FILE *geomfile, FILE *indexfile, const char *tmpdir, std::atomic<long long> *geompos, int maxzoom, int minzoom, int basezoom, double droprate, double gamma) {
 	// Run through the index and geometry for each reader,
 	// splitting the contents out by index into as many
 	// sub-files as we can write to simultaneously.
@@ -1115,7 +1231,7 @@ void radix(std::vector<struct reader> &readers, int nreaders, FILE *geomfile, FI
 
 	long long progress = 0, progress_max = geom_total, progress_reported = -1;
 	long long availfiles_before = availfiles;
-	radix1(geomfds, indexfds, nreaders, 0, splits, mem, tmpdir, &availfiles, geomfile, indexfile, geompos, &progress, &progress_max, &progress_reported, maxzoom, basezoom, droprate, gamma, ds);
+	radix1(geomfds, indexfds, nreaders, 0, splits, mem, tmpdir, &availfiles, geomfile, indexfile, geompos, &progress, &progress_max, &progress_reported, maxzoom, minzoom, basezoom, droprate, gamma, ds);
 
 	if (availfiles - 2 * nreaders != availfiles_before) {
 		fprintf(stderr, "Internal error: miscounted available file descriptors: %lld vs %lld\n", availfiles - 2 * nreaders, availfiles);
@@ -2209,7 +2325,7 @@ std::pair<int, metadata> read_input(std::vector<source> &sources, char *fname, i
 	serialize_uint(geomfile, ix, &geompos, fname);
 	serialize_uint(geomfile, iy, &geompos, fname);
 
-	radix(readers, CPUS, geomfile, indexfile, tmpdir, &geompos, maxzoom, basezoom, droprate, gamma);
+	radix(readers, CPUS, geomfile, indexfile, tmpdir, &geompos, maxzoom, minzoom, basezoom, droprate, gamma);
 
 	/* end of tile */
 	serialize_ulong_long(geomfile, 0, &geompos, fname);  // EOF
