@@ -68,6 +68,7 @@
 #include "thread.hpp"
 #include "platform.hpp"
 
+// FILE *debug_fp = NULL;
 static int low_detail = 12;
 static int full_detail = -1;
 static int min_detail = 7;
@@ -442,6 +443,7 @@ static void merge_with_priority(struct mergelist *merges, size_t nmerges, unsign
 		long long pos = *geompos;
 
 		fwrite_check(geom_map + ix.start, 1, ix.end - ix.start - 1, geom_out, geompos, "merge geometry");
+		// fprintf(debug_fp, "%llu, %d\n", ix.ix, ix.minzoom);
 		serialize_byte(geom_out, ix.minzoom, geompos, "merge geometry");
 		*progress += (ix.end - ix.start) * 3 / 4;
 		if (!quiet && !quiet_progress && progress_time() && 100 * *progress / *progress_max != *progress_reported) {
@@ -3087,6 +3089,9 @@ int main(int argc, char **argv) {
 	mtrace();
 #endif
 
+	// // create a global variable to a file that can be used to write debug messages
+	// debug_fp = fopen("./debug.txt", "w");
+	// fprintf(debug_fp, "idx,zoom\n");
 	av = argv;
 	init_cpus();
 
