@@ -349,6 +349,33 @@ int calc_feature_minzoom(struct index *ix, struct drop_state *ds, int maxzoom, d
 	return feature_minzoom;
 }
 
+bool is_too_close(const std::unordered_map<size_t, size_t>& windows,
+				size_t candidate_ix, size_t min_interval) {
+	size_t candidate_window = candidate_ix / min_interval;
+
+	// check if the current window is already taken.
+	if (windows.count(candidate_window)){
+		return true;
+	}
+
+	// check the window to the right.
+	if (windows.count(candidate_window + 1)) {
+		if ((windows.at(candidate_window + 1) - candidate_ix) < min_interval){
+			return true;
+		}
+	}
+
+	// check the window to the left.
+	if (candidate_window > 0 && windows.count(candidate_window - 1)) {
+		if ((candidate_ix - windows.at(candidate_window - 1)) < min_interval){
+			return true;
+		}
+
+	}
+
+	return false;
+};
+
 void calc_feature_minzoom_with_priority(std::vector<struct index> &features, int maxzoom, int minzoom, double gamma, struct drop_state *ds) {
 	
 	// determine if we should preserve point density
@@ -389,19 +416,15 @@ void calc_feature_minzoom_with_priority(std::vector<struct index> &features, int
 				continue;
 			}
 
-			// so this is really simple and cheap way to calculate a unique index for a "window" of size min_interval
-            size_t window_index = feature.ix / min_interval;
-			size_t existing_spatial_idx = window_idx_to_spatial_idx[window_index];
-			if (existing_spatial_idx < 1)
-			{
+			if (!is_too_close(window_idx_to_spatial_idx, feature.ix, min_interval)) {
 				feature.minzoom = z;
-				window_idx_to_spatial_idx[window_index] = feature.ix;
+				window_idx_to_spatial_idx[feature.ix / min_interval] = feature.ix;
 				assigned_features += 1;
 			}
 			if (assigned_features >= X) {
 				break;
 			}
-        }
+		}
 
 	}
 }
